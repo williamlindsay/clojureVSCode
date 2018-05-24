@@ -18,49 +18,78 @@ function slashUnescape(contents: string) {
     });
 }
 
-export const formatFile = (textEditor: vscode.TextEditor, edit?: vscode.TextEditorEdit): void => {
+const parseReplOutput = (value: any[]): string => {
+    if ('ex' in value[0]) {
+        vscode.window.showErrorMessage(value[1].err);
+        throw value[1].err;
+    };
+    if (('value' in value[1]) && (value[1].value != 'nil')) {
+        let new_content: string = value[1].value.slice(1, -1);
+        new_content = slashUnescape(new_content);
+        return new_content;
+    };
 
-    if (!cljConnection.isConnected()) {
-        vscode.window.showErrorMessage("Formatting functions don't work, connect to nREPL first.");
-        return;
-    }
+    throw 'Unknown error';
+}
 
-    const selection = textEditor.selection;
-    let contents: string = selection.isEmpty ? textEditor.document.getText() : textEditor.document.getText(selection);
+const replEvaluate = async (command: string): Promise<string> => {
+    return parseReplOutput(await nreplClient.evaluate(command));
+}
 
-    // Escaping the string before sending it to nREPL
-    contents = slashEscape(contents)
-
-
+const formatCljfmt = (
+    textEditor: vscode.TextEditor,
+    contents: string
+): Promise<string> => {
     let cljfmtParams = vscode.workspace.getConfiguration('clojureVSCode').cljfmtParameters;
     cljfmtParams = cljfmtParams.isEmpty ? "nil" : "{"+cljfmtParams+"}";
-
 
     // Running "(require 'cljfmt.core)" in right after we have checked we are connected to nREPL
     // would be a better option but in this case "cljfmt.core/reformat-string" fails the first
     // time it is called. I have no idea what causes this behavior so I decided to put the require
     // statement right here - don't think it does any harm. If someone knows how to fix it
     // please send a pull request with a fix.
-    nreplClient.evaluate(`(require 'cljfmt.core) (cljfmt.core/reformat-string "${contents}" ${cljfmtParams})`)
-        .then(value => {
-            if ('ex' in value[0]) {
-                vscode.window.showErrorMessage(value[1].err);
-                return;
-            };
-            if (('value' in value[1]) && (value[1].value != 'nil')) {
-                let new_content: string = value[1].value.slice(1, -1);
-                new_content = slashUnescape(new_content);
-                let selection = textEditor.selection;
-                if (textEditor.selection.isEmpty) {
-                    const lines: string[] = textEditor.document.getText().split(/\r?\n/g);
-                    const lastChar: number = lines[lines.length - 1].length;
-                    selection = new vscode.Selection(new vscode.Position(0, 0), new vscode.Position(textEditor.document.lineCount, lastChar));
-                }
-                textEditor.edit(editBuilder => {
-                    editBuilder.replace(selection, new_content);
-                });
-            };
-        });
+    return replEvaluate(`(require 'cljfmt.core) (cljfmt.core/reformat-string "${contents}" ${cljfmtParams})`);
+}
+
+const formatAll = async (textEditor: vscode.TextEditor, selection: vscode.Selection): Promise<string> => {
+    let contents: string = selection.isEmpty ? textEditor.document.getText() : textEditor.document.getText(selection);
+
+    // Escaping the string before sending it to nREPL
+    contents = slashEscape(contents);
+
+    contents = await formatCljfmt(textEditor, contents);
+
+    return contents;
+}
+
+const getTextEditorSelection = (textEditor: vscode.TextEditor): vscode.Selection => {
+    let selection = textEditor.selection;
+    if (textEditor.selection.isEmpty) {
+        const lines: string[] = textEditor.document.getText().split(/\r?\n/g);
+        const lastChar: number = lines[lines.length - 1].length;
+        selection = new vscode.Selection(new vscode.Position(0, 0), new vscode.Position(textEditor.document.lineCount, lastChar));
+    }
+
+    return selection;
+}
+
+export const formatFile = (textEditor: vscode.TextEditor, edit?: vscode.TextEditorEdit): Promise<void> => {
+    return new Promise<void>((resolve, reject) => {
+        if (!cljConnection.isConnected()) {
+            const error = "Formatting functions don't work, connect to nREPL first.";
+            vscode.window.showErrorMessage(error);
+            reject(error);
+            return;
+        }
+
+        const selection = getTextEditorSelection(textEditor);
+        formatAll(textEditor, selection).then(new_content => {
+            textEditor.edit(editBuilder => {
+                editBuilder.replace(selection, new_content);
+                resolve();
+            });
+        }, reject);
+    });
 }
 
 export const maybeActivateFormatOnSave = () => {
@@ -77,7 +106,7 @@ export const maybeActivateFormatOnSave = () => {
         const globalEditorFormatOnSave = editorConfig && editorConfig.has('formatOnSave') && editorConfig.get('formatOnSave') === true;
         let clojureConfig = vscode.workspace.getConfiguration('clojureVSCode');
         if ((clojureConfig.formatOnSave || globalEditorFormatOnSave) && textEditor.document === document) {
-            formatFile(textEditor, undefined);
+            e.waitUntil(formatFile(textEditor, undefined));
         }
     });
 }
