@@ -1,51 +1,13 @@
 {
-    "name": "clojure",
-    "displayName": "Clojure",
-    "description": "Clojure nREPL support for Visual Studio Code",
-    "version": "0.9.8",
-    "publisher": "avli",
+    "name": "clojure-lint",
+    "displayName": "Clojure-lint",
+    "description": "Extension to Andrey Lisin's Clojure",
+    "version": "0.1.1",
+    "publisher": "williamlindsay",
     "author": {
-        "name": "Andrey Lisin",
-        "email": "andrey.lisin@gmail.com"
+        "name": "William Lindsay",
+        "email": "william.lindsay@magnetforensics.com"
     },
-    "contributors": [
-        {
-            "name": "Thiago Almeida",
-            "email": "fasfsfgs@gmail.com"
-        },
-        {
-            "name": "Mike Ball",
-            "email": "michaelhball@gmail.com"
-        },
-        {
-            "name": "Egor Yurtaev",
-            "email": "yurtaev.egor+github@gmail.com"
-        },
-        {
-            "name": "Mark Hansen",
-            "email": "mark@markhansen.co.nz"
-        },
-        {
-            "name": "Fabian Achammer",
-            "email": "fabian.achammer@gmail.com"
-        },
-        {
-            "name": "Nikita Prokopov",
-            "email": "prokopov@gmail.com"
-        },
-        {
-            "name": "Frederik Ring",
-            "email": "frederik.ring@gmail.com"
-        },
-        {
-            "name": "Alessandro Decina",
-            "email": "alessandro.d@gmail.com"
-        },
-        {
-            "name": "Marc O'Morain",
-            "email": "github.com@marcomorain.com"
-        }
-    ],
     "license": "MIT",
     "icon": "images/icon.png",
     "engines": {
@@ -133,6 +95,6 @@
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/avli/clojureVSCode"
+        "url": "https://github.com/williamlindsay/clojureVSCode"
     }
 }

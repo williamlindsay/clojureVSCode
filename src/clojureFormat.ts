@@ -18,7 +18,7 @@ function slashUnescape(contents: string) {
     });
 }
 
-const parseReplOutput = (value: any[]): string => {
+const parseCljfmtOutput = (value: any[]): string => {
     if ('ex' in value[0]) {
         vscode.window.showErrorMessage(value[1].err);
         throw value[1].err;
@@ -32,14 +32,11 @@ const parseReplOutput = (value: any[]): string => {
     throw 'Unknown error';
 }
 
-const replEvaluate = async (command: string): Promise<string> => {
-    return parseReplOutput(await nreplClient.evaluate(command));
+const replEvaluate = async (command: string): Promise<any[]> => {
+    return await nreplClient.evaluate(command);
 }
 
-const formatCljfmt = (
-    textEditor: vscode.TextEditor,
-    contents: string
-): Promise<string> => {
+const formatCljfmt = async (contents: string): Promise<string> => {
     let cljfmtParams = vscode.workspace.getConfiguration('clojureVSCode').cljfmtParameters;
     cljfmtParams = cljfmtParams.isEmpty ? "nil" : "{"+cljfmtParams+"}";
 
@@ -48,16 +45,95 @@ const formatCljfmt = (
     // time it is called. I have no idea what causes this behavior so I decided to put the require
     // statement right here - don't think it does any harm. If someone knows how to fix it
     // please send a pull request with a fix.
-    return replEvaluate(`(require 'cljfmt.core) (cljfmt.core/reformat-string "${contents}" ${cljfmtParams})`);
+    return parseCljfmtOutput(
+        await replEvaluate(`(require 'cljfmt.core) (cljfmt.core/reformat-string "${contents}" ${cljfmtParams})`)
+    );
+}
+
+interface IProblem {
+    msg: string;
+    uri: string;
+    column: number;
+    line: number;
+}
+
+interface IEastwoodReport {
+    warnings: IProblem[];
+    err?: any;
+    'err-data'?: any;
+}
+
+const getNamespace = (contents: string): string => {
+    return contents.split('(ns ', 2)[1].split(' ', 1)[0].trim();
+}
+
+const checkEastwood = async (diagnosticsCollection: vscode.DiagnosticCollection, contents: string): Promise<void> => {
+    const namespace = getNamespace(contents);
+    const result = await replEvaluate(
+        `(require \'[eastwood.lint :as e]
+                  \'[clojure.data.json :as json])
+         (json/write-str
+           (e/lint {:namespaces [(symbol "${namespace}")]
+                    :config-files ["eastwood.clj"]
+                    :exclude-linters [:suspicious-expression]
+                    :add-linters [:unused-namespaces]})
+           :value-fn
+           (fn [key value] (if (instance? java.net.URI value) (.toString value) value)))`
+    );
+    const diagnosticMap: Map<string, vscode.Diagnostic[]> = new Map();
+    const addDiagnostic = (file: string, line: number, column: number, msg: string, severity: vscode.DiagnosticSeverity) => {
+        const range = new vscode.Range(line-1, column-1, line-1, column);
+        let diagnostics = diagnosticMap.get(file);
+        if (!diagnostics) { diagnostics = []; }
+        diagnostics.push(new vscode.Diagnostic(range, msg, severity));
+        diagnosticMap.set(file, diagnostics);
+    }
+
+    result.forEach(r => {
+        if (!r.value || r.value === 'nil') {
+            return;
+        }
+
+        const parsedValue = JSON.parse(JSON.parse(r.value));
+        parsedValue.warnings.forEach((warning: any) => {
+            const path = warning.uri.split('file:/')[1];
+            const canonicalFile = vscode.Uri.file(path).toString();
+            addDiagnostic(
+                canonicalFile,
+                warning.line,
+                warning.column,
+                warning.msg,
+                vscode.DiagnosticSeverity.Error
+            );
+        });
+
+
+        if (parsedValue.err) {
+            addDiagnostic(
+                '.',
+                1,
+                1,
+                `ERROR: ${parsedValue.err} - ${JSON.stringify(parsedValue['err-data'])}`,
+                vscode.DiagnosticSeverity.Error
+            );
+        }
+    });
+    diagnosticMap.forEach((diags, file) => {
+        diagnosticsCollection.set(vscode.Uri.parse(file), diags);
+    });
+}
+
+const getContents = (textEditor: vscode.TextEditor, selection?: vscode.Selection): string => {
+    const select = selection ? selection : getTextEditorSelection(textEditor);
+    return select.isEmpty ? textEditor.document.getText() : textEditor.document.getText(select);
 }
 
 const formatAll = async (textEditor: vscode.TextEditor, selection: vscode.Selection): Promise<string> => {
-    let contents: string = selection.isEmpty ? textEditor.document.getText() : textEditor.document.getText(selection);
+    let contents: string = getContents(textEditor, selection);
 
     // Escaping the string before sending it to nREPL
     contents = slashEscape(contents);
-
-    contents = await formatCljfmt(textEditor, contents);
+    contents = await formatCljfmt(contents);
 
     return contents;
 }
@@ -92,20 +168,23 @@ export const formatFile = (textEditor: vscode.TextEditor, edit?: vscode.TextEdit
     });
 }
 
-export const maybeActivateFormatOnSave = () => {
+export const maybeActivateFormatOnSave = (diagnosticsCollection: vscode.DiagnosticCollection) => {
     vscode.workspace.onWillSaveTextDocument(e => {
         const document = e.document;
         if (document.languageId !== "clojure") {
             return;
         }
-        let textEditor = vscode.window.activeTextEditor;
+        const textEditor = vscode.window.activeTextEditor;
         if (!textEditor) {
             return
         }
-        let editorConfig = vscode.workspace.getConfiguration('editor');
+        diagnosticsCollection.clear();
+
+        const editorConfig = vscode.workspace.getConfiguration('editor');
         const globalEditorFormatOnSave = editorConfig && editorConfig.has('formatOnSave') && editorConfig.get('formatOnSave') === true;
-        let clojureConfig = vscode.workspace.getConfiguration('clojureVSCode');
+        const clojureConfig = vscode.workspace.getConfiguration('clojureVSCode');
         if ((clojureConfig.formatOnSave || globalEditorFormatOnSave) && textEditor.document === document) {
+            checkEastwood(diagnosticsCollection, getContents(textEditor));
             e.waitUntil(formatFile(textEditor, undefined));
         }
     });

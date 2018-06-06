@@ -21,7 +21,9 @@ export function activate(context: vscode.ExtensionContext) {
         cljConnection.startNRepl();
     }
 
-    maybeActivateFormatOnSave();
+    const diagnosticsCollection = vscode.languages.createDiagnosticCollection('clojure');
+    context.subscriptions.push(diagnosticsCollection);
+    maybeActivateFormatOnSave(diagnosticsCollection);
 
     vscode.commands.registerCommand('clojureVSCode.manuallyConnectToNRepl', cljConnection.manuallyConnect);
     vscode.commands.registerCommand('clojureVSCode.stopDisconnectNRepl', cljConnection.disconnect);

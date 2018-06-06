@@ -16,6 +16,7 @@ const LEIN_ARGS: string[] = [
     ':dependencies',
     'conj',
     '[cljfmt "0.5.7"]',
+    '[jonase/eastwood "0.2.5"]',
     '--',
     'update-in',
     ':plugins',
