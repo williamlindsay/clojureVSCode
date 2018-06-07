@@ -32,10 +32,6 @@ const parseCljfmtOutput = (value: any[]): string => {
     throw 'Unknown error';
 }
 
-const replEvaluate = async (command: string): Promise<any[]> => {
-    return await nreplClient.evaluate(command);
-}
-
 const formatCljfmt = async (contents: string): Promise<string> => {
     let cljfmtParams = vscode.workspace.getConfiguration('clojureVSCode').cljfmtParameters;
     cljfmtParams = cljfmtParams.isEmpty ? "nil" : "{"+cljfmtParams+"}";
@@ -46,7 +42,7 @@ const formatCljfmt = async (contents: string): Promise<string> => {
     // statement right here - don't think it does any harm. If someone knows how to fix it
     // please send a pull request with a fix.
     return parseCljfmtOutput(
-        await replEvaluate(`(require 'cljfmt.core) (cljfmt.core/reformat-string "${contents}" ${cljfmtParams})`)
+        await nreplClient.evaluate(`(require 'cljfmt.core) (cljfmt.core/reformat-string "${contents}" ${cljfmtParams})`)
     );
 }
 
@@ -67,9 +63,79 @@ const getNamespace = (contents: string): string => {
     return contents.split('(ns ', 2)[1].split(' ', 1)[0].trim();
 }
 
+const addDiagnostic = (
+    diagnosticMap: Map<string, vscode.Diagnostic[]>,
+    file: string,
+    line: { start: number, end: number },
+    column: { start: number, end: number },
+    msg: string,
+    severity: vscode.DiagnosticSeverity
+) => {
+    const range = new vscode.Range(line.start, column.start, line.end, column.end);
+    let diagnostics = diagnosticMap.get(file);
+    if (!diagnostics) { diagnostics = []; }
+    diagnostics.push(new vscode.Diagnostic(range, msg, severity));
+    diagnosticMap.set(file, diagnostics);
+}
+
+const bikeshedCommand = (filename: string) => `
+    (require \'[bikeshed.core :as b])
+    (let [all-files [(clojure.java.io/file "${filename}")]]
+      (b/long-lines all-files :max-line-length 90)
+      (b/trailing-whitespace all-files)
+      (b/trailing-blank-lines all-files)
+      (b/bad-roots all-files))
+`;
+
+const checkBikeshed = async (diagnosticsCollection: vscode.DiagnosticCollection, filename: string): Promise<void> => {
+    const result = await nreplClient.evaluate(bikeshedCommand(filename.replace(/\\/g, '\\\\')));
+    const diagnosticMap: Map<string, vscode.Diagnostic[]> = new Map();
+
+    let rule: string | null;
+    result.forEach(r => {
+        if (!r.out) {
+            rule = null;
+            return;
+        }
+
+        const out: string = r.out.trim();
+        if (out.startsWith('Checking for')) {
+            const i = out.indexOf('.');
+            rule = r.out.substring('Checking for'.length + 2, i);
+            return;
+        }
+
+        if (out.startsWith('No ')) {
+            rule = null;
+            return;
+        }
+
+        const extIndex = out.indexOf('.clj');
+        const file = out.substring(0, extIndex + 4);
+        const rest = out.substring(extIndex + 5, out.length);
+
+        const colonIndex = rest.indexOf(':');
+        const lineNumber = +rest.substring(0, colonIndex) - 1;
+        const line = rest.substring(colonIndex + 1, rest.length);
+
+        addDiagnostic(
+            diagnosticMap,
+            vscode.Uri.file(file).toString(),
+            { start: lineNumber, end: lineNumber },
+            { start: 0, end: line.length - 1 },
+            `${rule}: ${line}`,
+            vscode.DiagnosticSeverity.Error
+        )
+    });
+
+    diagnosticMap.forEach((diags, file) => {
+        diagnosticsCollection.set(vscode.Uri.parse(file), diags);
+    });
+}
+
 const checkEastwood = async (diagnosticsCollection: vscode.DiagnosticCollection, contents: string): Promise<void> => {
     const namespace = getNamespace(contents);
-    const result = await replEvaluate(
+    const result = await nreplClient.evaluate(
         `(require \'[eastwood.lint :as e]
                   \'[clojure.data.json :as json])
          (json/write-str
@@ -81,14 +147,6 @@ const checkEastwood = async (diagnosticsCollection: vscode.DiagnosticCollection,
            (fn [key value] (if (instance? java.net.URI value) (.toString value) value)))`
     );
     const diagnosticMap: Map<string, vscode.Diagnostic[]> = new Map();
-    const addDiagnostic = (file: string, line: number, column: number, msg: string, severity: vscode.DiagnosticSeverity) => {
-        const range = new vscode.Range(line-1, column-1, line-1, column);
-        let diagnostics = diagnosticMap.get(file);
-        if (!diagnostics) { diagnostics = []; }
-        diagnostics.push(new vscode.Diagnostic(range, msg, severity));
-        diagnosticMap.set(file, diagnostics);
-    }
-
     result.forEach(r => {
         if (!r.value || r.value === 'nil') {
             return;
@@ -99,9 +157,10 @@ const checkEastwood = async (diagnosticsCollection: vscode.DiagnosticCollection,
             const path = warning.uri.split('file:/')[1];
             const canonicalFile = vscode.Uri.file(path).toString();
             addDiagnostic(
+                diagnosticMap,
                 canonicalFile,
-                warning.line,
-                warning.column,
+                { start: warning.line - 1, end: warning.line - 1 },
+                { start: warning.column - 1, end: warning.column },
                 warning.msg,
                 vscode.DiagnosticSeverity.Error
             );
@@ -110,9 +169,10 @@ const checkEastwood = async (diagnosticsCollection: vscode.DiagnosticCollection,
 
         if (parsedValue.err) {
             addDiagnostic(
+                diagnosticMap,
                 '.',
-                1,
-                1,
+                { start: 0, end: 0 },
+                { start: 0, end: 1 },
                 `ERROR: ${parsedValue.err} - ${JSON.stringify(parsedValue['err-data'])}`,
                 vscode.DiagnosticSeverity.Error
             );
@@ -125,17 +185,8 @@ const checkEastwood = async (diagnosticsCollection: vscode.DiagnosticCollection,
 
 const getContents = (textEditor: vscode.TextEditor, selection?: vscode.Selection): string => {
     const select = selection ? selection : getTextEditorSelection(textEditor);
-    return select.isEmpty ? textEditor.document.getText() : textEditor.document.getText(select);
-}
-
-const formatAll = async (textEditor: vscode.TextEditor, selection: vscode.Selection): Promise<string> => {
-    let contents: string = getContents(textEditor, selection);
-
-    // Escaping the string before sending it to nREPL
-    contents = slashEscape(contents);
-    contents = await formatCljfmt(contents);
-
-    return contents;
+    const contents =  select.isEmpty ? textEditor.document.getText() : textEditor.document.getText(select);
+    return slashEscape(contents);
 }
 
 const getTextEditorSelection = (textEditor: vscode.TextEditor): vscode.Selection => {
@@ -154,15 +205,15 @@ export const formatFile = (textEditor: vscode.TextEditor, edit?: vscode.TextEdit
         if (!cljConnection.isConnected()) {
             const error = "Formatting functions don't work, connect to nREPL first.";
             vscode.window.showErrorMessage(error);
-            reject(error);
-            return;
+            return reject(error);
         }
 
         const selection = getTextEditorSelection(textEditor);
-        formatAll(textEditor, selection).then(new_content => {
+        const contents = getContents(textEditor, selection);
+        formatCljfmt(contents).then(new_contents => {
             textEditor.edit(editBuilder => {
-                editBuilder.replace(selection, new_content);
-                resolve();
+                editBuilder.replace(selection, new_contents);
+                return resolve();
             });
         }, reject);
     });
@@ -185,6 +236,7 @@ export const maybeActivateFormatOnSave = (diagnosticsCollection: vscode.Diagnost
         const clojureConfig = vscode.workspace.getConfiguration('clojureVSCode');
         if ((clojureConfig.formatOnSave || globalEditorFormatOnSave) && textEditor.document === document) {
             checkEastwood(diagnosticsCollection, getContents(textEditor));
+            checkBikeshed(diagnosticsCollection, document.fileName);
             e.waitUntil(formatFile(textEditor, undefined));
         }
     });

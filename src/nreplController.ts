@@ -17,6 +17,7 @@ const LEIN_ARGS: string[] = [
     'conj',
     '[cljfmt "0.5.7"]',
     '[jonase/eastwood "0.2.5"]',
+    '[lein-bikeshed "0.5.1"]',
     '--',
     'update-in',
     ':plugins',
