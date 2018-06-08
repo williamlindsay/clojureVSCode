@@ -60,7 +60,7 @@ interface IEastwoodReport {
 }
 
 const getNamespace = (contents: string): string => {
-    return contents.split('(ns ', 2)[1].split(' ', 1)[0].trim();
+    return contents.split('(ns ', 2)[1].split(' ', 1)[0].trim().replace('\\n', '');
 }
 
 const addDiagnostic = (
@@ -87,7 +87,12 @@ const bikeshedCommand = (filename: string) => `
       (b/bad-roots all-files))
 `;
 
-const checkBikeshed = async (diagnosticsCollection: vscode.DiagnosticCollection, filename: string): Promise<void> => {
+const getProjectMapCommand = (projectFilePath: string) => `
+    (require \'[leiningen.core.project :as p])
+    (p/read)
+`;
+
+const checkBikeshed = async (diagnosticsCollection: vscode.DiagnosticCollection, filename: string): Promise<Map<string, vscode.Diagnostic[]>> => {
     const result = await nreplClient.evaluate(bikeshedCommand(filename.replace(/\\/g, '\\\\')));
     const diagnosticMap: Map<string, vscode.Diagnostic[]> = new Map();
 
@@ -122,22 +127,21 @@ const checkBikeshed = async (diagnosticsCollection: vscode.DiagnosticCollection,
             diagnosticMap,
             vscode.Uri.file(file).toString(),
             { start: lineNumber, end: lineNumber },
-            { start: 0, end: line.length - 1 },
+            { start: 0, end: line.length },
             `${rule}: ${line}`,
             vscode.DiagnosticSeverity.Error
         )
     });
 
-    diagnosticMap.forEach((diags, file) => {
-        diagnosticsCollection.set(vscode.Uri.parse(file), diags);
-    });
+    return diagnosticMap;
 }
 
-const checkEastwood = async (diagnosticsCollection: vscode.DiagnosticCollection, contents: string): Promise<void> => {
+const checkEastwood = async (diagnosticsCollection: vscode.DiagnosticCollection, contents: string): Promise<Map<string, vscode.Diagnostic[]>> => {
     const namespace = getNamespace(contents);
     const result = await nreplClient.evaluate(
         `(require \'[eastwood.lint :as e]
-                  \'[clojure.data.json :as json])
+                  \'[clojure.data.json :as json]
+                  \'[${namespace}])
          (json/write-str
            (e/lint {:namespaces [(symbol "${namespace}")]
                     :config-files ["eastwood.clj"]
@@ -178,9 +182,8 @@ const checkEastwood = async (diagnosticsCollection: vscode.DiagnosticCollection,
             );
         }
     });
-    diagnosticMap.forEach((diags, file) => {
-        diagnosticsCollection.set(vscode.Uri.parse(file), diags);
-    });
+
+    return diagnosticMap;
 }
 
 const getContents = (textEditor: vscode.TextEditor, selection?: vscode.Selection): string => {
@@ -198,6 +201,31 @@ const getTextEditorSelection = (textEditor: vscode.TextEditor): vscode.Selection
     }
 
     return selection;
+}
+
+const performLintChecks = async (
+    diagnosticsCollection: vscode.DiagnosticCollection,
+    textEditor: vscode.TextEditor,
+    filename: string
+): Promise<void> => {
+    const maps = [
+        await checkEastwood(diagnosticsCollection, getContents(textEditor)),
+        await checkBikeshed(diagnosticsCollection, filename)
+    ];
+
+    const diagnosticMap: Map<string, vscode.Diagnostic[]> = new Map();
+    maps.forEach(m => {
+        m.forEach((v, k) => {
+            let diagnostics = diagnosticMap.get(k);
+            if (!diagnostics) { diagnostics = []; }
+            diagnostics.push(...v);
+            diagnosticMap.set(k, diagnostics);
+        });
+    });
+
+    diagnosticMap.forEach((diags, file) => {
+        diagnosticsCollection.set(vscode.Uri.parse(file), diags);
+    });
 }
 
 export const formatFile = (textEditor: vscode.TextEditor, edit?: vscode.TextEditorEdit): Promise<void> => {
@@ -219,25 +247,38 @@ export const formatFile = (textEditor: vscode.TextEditor, edit?: vscode.TextEdit
     });
 }
 
+const shouldRunFormat = (textEditor: vscode.TextEditor, document: vscode.TextDocument) => {
+    const editorConfig = vscode.workspace.getConfiguration('editor');
+    const globalEditorFormatOnSave = editorConfig && editorConfig.has('formatOnSave') && editorConfig.get('formatOnSave') === true;
+    const clojureConfig = vscode.workspace.getConfiguration('clojureVSCode');
+
+    return document.languageId === "clojure" &&
+           (clojureConfig.formatOnSave || globalEditorFormatOnSave) &&
+           textEditor.document === document;
+}
+
 export const maybeActivateFormatOnSave = (diagnosticsCollection: vscode.DiagnosticCollection) => {
     vscode.workspace.onWillSaveTextDocument(e => {
         const document = e.document;
-        if (document.languageId !== "clojure") {
-            return;
-        }
         const textEditor = vscode.window.activeTextEditor;
         if (!textEditor) {
             return
         }
-        diagnosticsCollection.clear();
 
-        const editorConfig = vscode.workspace.getConfiguration('editor');
-        const globalEditorFormatOnSave = editorConfig && editorConfig.has('formatOnSave') && editorConfig.get('formatOnSave') === true;
-        const clojureConfig = vscode.workspace.getConfiguration('clojureVSCode');
-        if ((clojureConfig.formatOnSave || globalEditorFormatOnSave) && textEditor.document === document) {
-            checkEastwood(diagnosticsCollection, getContents(textEditor));
-            checkBikeshed(diagnosticsCollection, document.fileName);
+        if (shouldRunFormat(textEditor, document)) {
             e.waitUntil(formatFile(textEditor, undefined));
         }
     });
+
+    vscode.workspace.onDidSaveTextDocument(e => {
+        const textEditor = vscode.window.activeTextEditor;
+        if (!textEditor) {
+            return
+        }
+
+        if (shouldRunFormat(textEditor, e)) {
+            diagnosticsCollection.clear();
+            performLintChecks(diagnosticsCollection, textEditor, e.fileName);
+        }
+    })
 }
