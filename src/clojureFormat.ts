@@ -335,7 +335,10 @@ export const maybeActivateFormatOnSave = (diagnosticsCollection: vscode.Diagnost
 
         if (shouldRunFormat(textEditor, e)) {
             diagnosticsCollection.clear();
-            performLintChecks(diagnosticsCollection, textEditor, e.fileName);
+            vscode.window.withProgress(
+                { title: 'Linting...', location: vscode.ProgressLocation.Window },
+                () => performLintChecks(diagnosticsCollection, textEditor, e.fileName)
+            );
         }
     })
 }

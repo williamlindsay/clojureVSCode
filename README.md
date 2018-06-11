@@ -4,6 +4,7 @@ Based on Andrey Lisin's VS Code Clojure extension.
 - Adds linters which run async on save: eastwood, bikeshed
 - Options for linters are now pulled from project.clj as explained in their respective repoes
 - Reports Clojure compilation errors to problems as well
+- Bottom left spinner will appear while linting in progress
 
 Limitations:
 - Must save twice at the start for some reason to fix bug above
