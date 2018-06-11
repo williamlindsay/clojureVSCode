@@ -18,6 +18,7 @@ const LEIN_ARGS: string[] = [
     '[cljfmt "0.5.7"]',
     '[jonase/eastwood "0.2.5"]',
     '[lein-bikeshed "0.5.1"]',
+    '[leiningen-core "2.7.1"]',
     '--',
     'update-in',
     ':plugins',

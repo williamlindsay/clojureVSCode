@@ -79,17 +79,21 @@ const addDiagnostic = (
 }
 
 const bikeshedCommand = (filename: string) => `
-    (require \'[bikeshed.core :as b])
-    (let [all-files [(clojure.java.io/file "${filename}")]]
-      (b/long-lines all-files :max-line-length 90)
-      (b/trailing-whitespace all-files)
-      (b/trailing-blank-lines all-files)
-      (b/bad-roots all-files))
-`;
-
-const getProjectMapCommand = (projectFilePath: string) => `
-    (require \'[leiningen.core.project :as p])
-    (p/read)
+    (require \'[bikeshed.core :as b]
+             \'[leiningen.core.project :as p])
+    (let [options (:bikeshed (p/read))
+          all-files [(clojure.java.io/file "${filename}")]]
+      (if-not (false? (:long-lines options))
+        (b/long-lines
+          all-files
+          :max-line-length
+          (or (:max-line-length options) 80)))
+      (if-not (false? (:trailing-whitespace options))
+        (b/trailing-whitespace all-files))
+      (if-not (false? (:trailing-blank-lines options))
+        (b/trailing-blank-lines all-files))
+      (if-not (false? (:var-redefs options))
+        (b/bad-roots all-files)))
 `;
 
 const checkBikeshed = async (diagnosticsCollection: vscode.DiagnosticCollection, filename: string): Promise<Map<string, vscode.Diagnostic[]>> => {
@@ -136,17 +140,18 @@ const checkBikeshed = async (diagnosticsCollection: vscode.DiagnosticCollection,
     return diagnosticMap;
 }
 
-const checkEastwood = async (diagnosticsCollection: vscode.DiagnosticCollection, contents: string): Promise<Map<string, vscode.Diagnostic[]>> => {
+const checkEastwood = async (
+    diagnosticsCollection: vscode.DiagnosticCollection,
+    contents: string
+): Promise<Map<string, vscode.Diagnostic[]>> => {
     const namespace = getNamespace(contents);
     const result = await nreplClient.evaluate(
         `(require \'[eastwood.lint :as e]
+                  \'[leiningen.core.project :as p]
                   \'[clojure.data.json :as json]
                   \'[${namespace}])
          (json/write-str
-           (e/lint {:namespaces [(symbol "${namespace}")]
-                    :config-files ["eastwood.clj"]
-                    :exclude-linters [:suspicious-expression]
-                    :add-linters [:unused-namespaces]})
+           (e/lint (assoc (:eastwood (p/read)) :namespaces [(symbol "${namespace}")]))
            :value-fn
            (fn [key value] (if (instance? java.net.URI value) (.toString value) value)))`
     );
