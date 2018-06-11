@@ -63,6 +63,8 @@ const getNamespace = (contents: string): string => {
     return contents.split('(ns ', 2)[1].split(' ', 1)[0].trim().replace('\\n', '');
 }
 
+const isNumberValid = (n: number) => n !== undefined && n !== null && !isNaN(n);
+
 const addDiagnostic = (
     diagnosticMap: Map<string, vscode.Diagnostic[]>,
     file: string,
@@ -71,7 +73,12 @@ const addDiagnostic = (
     msg: string,
     severity: vscode.DiagnosticSeverity
 ) => {
-    const range = new vscode.Range(line.start, column.start, line.end, column.end);
+    const range = new vscode.Range(
+        isNumberValid(line.start) ? line.start : 0,
+        isNumberValid(column.start) ? column.start : 0,
+        isNumberValid(line.end) ? line.end : 0,
+        isNumberValid(column.end) ? column.end : 0
+    );
     let diagnostics = diagnosticMap.get(file);
     if (!diagnostics) { diagnostics = []; }
     diagnostics.push(new vscode.Diagnostic(range, msg, severity));
@@ -97,7 +104,8 @@ const bikeshedCommand = (filename: string) => `
 `;
 
 const checkBikeshed = async (diagnosticsCollection: vscode.DiagnosticCollection, filename: string): Promise<Map<string, vscode.Diagnostic[]>> => {
-    const result = await nreplClient.evaluate(bikeshedCommand(filename.replace(/\\/g, '\\\\')));
+    const file = filename.replace(/\\/g, '\\\\');
+    const result = await nreplClient.evaluate(bikeshedCommand(file));
     const diagnosticMap: Map<string, vscode.Diagnostic[]> = new Map();
 
     let rule: string | null;
@@ -140,11 +148,7 @@ const checkBikeshed = async (diagnosticsCollection: vscode.DiagnosticCollection,
     return diagnosticMap;
 }
 
-const checkEastwood = async (
-    diagnosticsCollection: vscode.DiagnosticCollection,
-    contents: string
-): Promise<Map<string, vscode.Diagnostic[]>> => {
-    const namespace = getNamespace(contents);
+const checkEastwood = async (diagnosticsCollection: vscode.DiagnosticCollection, namespace: string): Promise<Map<string, vscode.Diagnostic[]>> => {
     const result = await nreplClient.evaluate(
         `(require \'[eastwood.lint :as e]
                   \'[leiningen.core.project :as p]
@@ -153,7 +157,10 @@ const checkEastwood = async (
          (json/write-str
            (e/lint (assoc (:eastwood (p/read)) :namespaces [(symbol "${namespace}")]))
            :value-fn
-           (fn [key value] (if (instance? java.net.URI value) (.toString value) value)))`
+           (fn [key value] (cond
+                             (instance? java.net.URI value) (.toString value)
+                             (var? value) (.toString value)
+                             :else value)))`
     );
     const diagnosticMap: Map<string, vscode.Diagnostic[]> = new Map();
     result.forEach(r => {
@@ -191,6 +198,49 @@ const checkEastwood = async (
     return diagnosticMap;
 }
 
+const checkBuild = async (diagnosticsCollection: vscode.DiagnosticCollection, filepath: string, rootPath: string): Promise<Map<string, vscode.Diagnostic[]>> => {
+    const file = filepath.replace(/\\/g, '/');
+    const result = await nreplClient.evaluate(`
+        (load-file "${file}")
+    `);
+    const diagnosticMap: Map<string, vscode.Diagnostic[]> = new Map();
+    result.forEach(r => {
+        if (!r.err) {
+            return;
+        }
+
+        let error: string = r.err.trim();
+        const columnIndex = error.lastIndexOf(':');
+        const column = +error.slice(columnIndex + 1).replace(')', '');
+
+        error = error.slice(0, columnIndex);
+        const lineIndex = error.lastIndexOf(':');
+        const endLine = +error.slice(lineIndex + 1);
+
+        error = error.slice(0, lineIndex);
+        const canonicalFile = vscode.Uri.file(file).toString();
+
+        const startStr = 'starting at line ';
+        const startIndex = error.indexOf(startStr);
+        let startLine = endLine;
+        if (startIndex !== -1) {
+            const i = startIndex + startStr.length;
+            startLine = +error.substring(i, error.indexOf(',', i))
+        }
+
+        addDiagnostic(
+            diagnosticMap,
+            canonicalFile,
+            { start: startLine - 1, end: endLine },
+            { start: column - 1, end: column },
+            error,
+            vscode.DiagnosticSeverity.Error
+        );
+    })
+
+    return diagnosticMap;
+}
+
 const getContents = (textEditor: vscode.TextEditor, selection?: vscode.Selection): string => {
     const select = selection ? selection : getTextEditorSelection(textEditor);
     const contents =  select.isEmpty ? textEditor.document.getText() : textEditor.document.getText(select);
@@ -213,8 +263,10 @@ const performLintChecks = async (
     textEditor: vscode.TextEditor,
     filename: string
 ): Promise<void> => {
+    const namespace = getNamespace(getContents(textEditor));
     const maps = [
-        await checkEastwood(diagnosticsCollection, getContents(textEditor)),
+        await checkBuild(diagnosticsCollection, filename, vscode.workspace.rootPath || ''),
+        await checkEastwood(diagnosticsCollection, namespace),
         await checkBikeshed(diagnosticsCollection, filename)
     ];
 
