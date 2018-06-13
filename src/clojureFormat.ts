@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 
 import { cljConnection } from './cljConnection';
-import { cljParser } from './cljParser';
 import { nreplClient } from './nreplClient';
 
 function slashEscape(contents: string) {
@@ -19,15 +18,15 @@ function slashUnescape(contents: string) {
 }
 
 const parseCljfmtOutput = (value: any[]): string => {
-    if ('ex' in value[0]) {
-        vscode.window.showErrorMessage(value[1].err);
-        throw value[1].err;
-    };
-    if (('value' in value[1]) && (value[1].value != 'nil')) {
-        let new_content: string = value[1].value.slice(1, -1);
-        new_content = slashUnescape(new_content);
-        return new_content;
-    };
+    for (const v of value) {
+        if (v.value && v.value !== 'nil') {
+            let new_content: string = v.value.slice(1, -1);
+            new_content = slashUnescape(new_content);
+            return new_content;
+        } else if (v.err) {
+            throw v.err;
+        }
+    }
 
     throw 'Unknown error';
 }
@@ -41,9 +40,8 @@ const formatCljfmt = async (contents: string): Promise<string> => {
     // time it is called. I have no idea what causes this behavior so I decided to put the require
     // statement right here - don't think it does any harm. If someone knows how to fix it
     // please send a pull request with a fix.
-    return parseCljfmtOutput(
-        await nreplClient.evaluate(`(require 'cljfmt.core) (cljfmt.core/reformat-string "${contents}" ${cljfmtParams})`)
-    );
+    const result = await nreplClient.evaluate(`(require 'cljfmt.core) (cljfmt.core/reformat-string "${contents}" ${cljfmtParams})`);
+    return parseCljfmtOutput(result);
 }
 
 interface IProblem {
@@ -234,7 +232,7 @@ const checkBuild = async (diagnosticsCollection: vscode.DiagnosticCollection, fi
             { start: startLine - 1, end: endLine },
             { start: column - 1, end: column },
             error,
-            vscode.DiagnosticSeverity.Error
+            error.startsWith('WARNING:') ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Error
         );
     })
 
@@ -285,12 +283,10 @@ const performLintChecks = async (
     });
 }
 
-export const formatFile = (textEditor: vscode.TextEditor, edit?: vscode.TextEditorEdit): Promise<void> => {
+export const format = (textEditor: vscode.TextEditor): Promise<void> => {
     return new Promise<void>((resolve, reject) => {
         if (!cljConnection.isConnected()) {
-            const error = "Formatting functions don't work, connect to nREPL first.";
-            vscode.window.showErrorMessage(error);
-            return reject(error);
+            return reject("Formatting functions don't work, connect to nREPL first.");
         }
 
         const selection = getTextEditorSelection(textEditor);
@@ -302,6 +298,14 @@ export const formatFile = (textEditor: vscode.TextEditor, edit?: vscode.TextEdit
             });
         }, reject);
     });
+}
+
+export const formatFile = async (textEditor: vscode.TextEditor, edit?: vscode.TextEditorEdit): Promise<void> => {
+    try {
+        await format(textEditor);
+    } catch (e) {
+        vscode.window.showErrorMessage(e);
+    }
 }
 
 const shouldRunFormat = (textEditor: vscode.TextEditor, document: vscode.TextDocument) => {

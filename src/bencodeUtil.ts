@@ -11,11 +11,8 @@ export function encode(msg: any): Buffer {
     return bencoder.encode(msg);
 }
 
-/*
-    receives a buffer and returns an array of decoded objects and the remaining unused buffer
-*/
-export function decodeObjects(buffer: Buffer): DecodedResult {
-    const decodedResult: DecodedResult = { decodedObjects: [], rest: buffer };
+export function decodeString(v: string): DecodedResult {
+    const decodedResult: DecodedResult = { decodedObjects: [], rest: Buffer.from(v) };
     return decode(decodedResult);
 }
 
@@ -24,7 +21,7 @@ function decode(decodedResult: DecodedResult): DecodedResult {
         return decodedResult;
 
     try {
-        const decodedObj = bencoder.decode(decodedResult.rest);
+        const decodedObj = bencoder.decode(decodedResult.rest, 'ascii');
         decodedResult.decodedObjects.push(decodedObj);
         decodedResult.rest = Buffer.from('');
         return decodedResult;

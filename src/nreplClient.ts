@@ -46,6 +46,8 @@ interface nREPLCloseMessage {
     session?: string;
 }
 
+const DONE = 'doneee';
+
 const complete = (symbol: string, ns: string): Promise<any> => {
     const msg: nREPLCompleteMessage = { op: 'complete', symbol, ns };
     return send(msg).then(respObjs => respObjs[0]);
@@ -58,7 +60,7 @@ const info = (symbol: string, ns: string, session?: string): Promise<any> => {
 
 const evaluate = (code: string, session?: string): Promise<any[]> => clone(session).then((session_id) => {
     const msg: nREPLSingleEvalMessage = { op: 'eval', code: code, session: session_id };
-    return send(msg);
+    return send(msg, undefined, true);
 });
 
 const evaluateFile = (code: string, filepath: string, session?: string): Promise<any[]> => clone(session).then((session_id) => {
@@ -95,7 +97,11 @@ const listSessions = (): Promise<[string]> => {
     });
 }
 
-const send = (msg: nREPLCompleteMessage | nREPLInfoMessage | nREPLEvalMessage | nREPLStacktraceMessage | nREPLCloneMessage | nREPLCloseMessage | nREPLSingleEvalMessage, connection?: CljConnectionInformation): Promise<any[]> => {
+const send = (
+    msg: nREPLCompleteMessage | nREPLInfoMessage | nREPLEvalMessage | nREPLStacktraceMessage | nREPLCloneMessage | nREPLCloseMessage | nREPLSingleEvalMessage,
+    connection?: CljConnectionInformation,
+    expectValue?: boolean
+): Promise<any[]> => {
     return new Promise<any[]>((resolve, reject) => {
         connection = connection || cljConnection.getConnection();
 
@@ -116,31 +122,34 @@ const send = (msg: nREPLCompleteMessage | nREPLInfoMessage | nREPLEvalMessage | 
             reject(error);
         });
 
-        let nreplResp = Buffer.from('');
-        const respObjects: any[] = [];
+        let nreplResp = '';
+        let hasValue = false;
         client.on('data', data => {
-            nreplResp = Buffer.concat([nreplResp, data]);
-            const { decodedObjects, rest } = bencodeUtil.decodeObjects(nreplResp);
-            nreplResp = rest;
-            const validDecodedObjects = decodedObjects.reduce((objs, obj) => {
-                if (!isLastNreplObject(objs))
-                    objs.push(obj);
-                return objs;
-            }, []);
-            respObjects.push(...validDecodedObjects);
+            const s = data.toString();
+            nreplResp += s;
 
-            if (isLastNreplObject(respObjects)) {
-                client.end();
-                client.removeAllListeners();
-                resolve(respObjects);
+            const lastIndex = data.lastIndexOf(DONE);
+            if (lastIndex > -1) {
+                const endIndex = nreplResp.length + lastIndex + DONE.length;
+                const relevant = nreplResp.substring(0, endIndex);
+                const { decodedObjects } = bencodeUtil.decodeString(relevant);
+                hasValue = decodedObjects.find(o => o.value && o.value !== 'nil' || o.out) !== undefined;
+
+                if (hasValue || !expectValue) {
+                    client.end();
+                    client.removeAllListeners();
+                    resolve(decodedObjects);
+                } else {
+                    const remaining = nreplResp.substring(endIndex + 1, nreplResp.length);
+                    nreplResp = remaining || '';
+                }
             }
         });
     });
 };
 
-const isLastNreplObject = (nreplObjects: any[]): boolean => {
-    const lastObj = [...nreplObjects].pop();
-    return lastObj && lastObj.status && lastObj.status.indexOf('done') > -1;
+const lastNreplObjectIndex = (nreplObjets: any[]): number => {
+    return nreplObjets.findIndex(o => o && o.status && o.status.includes('done'));
 }
 
 export const nreplClient = {
