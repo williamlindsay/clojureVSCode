@@ -239,21 +239,15 @@ const checkBuild = async (diagnosticsCollection: vscode.DiagnosticCollection, fi
     return diagnosticMap;
 }
 
-const getContents = (textEditor: vscode.TextEditor, selection?: vscode.Selection): string => {
-    const select = selection ? selection : getTextEditorSelection(textEditor);
-    const contents =  select.isEmpty ? textEditor.document.getText() : textEditor.document.getText(select);
+const getContents = (textEditor: vscode.TextEditor): string => {
+    const contents =  textEditor.document.getText();
     return slashEscape(contents);
 }
 
 const getTextEditorSelection = (textEditor: vscode.TextEditor): vscode.Selection => {
-    let selection = textEditor.selection;
-    if (textEditor.selection.isEmpty) {
-        const lines: string[] = textEditor.document.getText().split(/\r?\n/g);
-        const lastChar: number = lines[lines.length - 1].length;
-        selection = new vscode.Selection(new vscode.Position(0, 0), new vscode.Position(textEditor.document.lineCount, lastChar));
-    }
-
-    return selection;
+    const lines: string[] = textEditor.document.getText().split(/\r?\n/g);
+    const lastChar: number = lines[lines.length - 1].length;
+    return new vscode.Selection(new vscode.Position(0, 0), new vscode.Position(textEditor.document.lineCount, lastChar));
 }
 
 const performLintChecks = async (
@@ -290,7 +284,7 @@ export const format = (textEditor: vscode.TextEditor): Promise<void> => {
         }
 
         const selection = getTextEditorSelection(textEditor);
-        const contents = getContents(textEditor, selection);
+        const contents = getContents(textEditor);
         formatCljfmt(contents).then(new_contents => {
             textEditor.edit(editBuilder => {
                 editBuilder.replace(selection, new_contents);
