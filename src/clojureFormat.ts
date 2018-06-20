@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 
 import { cljConnection } from './cljConnection';
 import { nreplClient } from './nreplClient';
+import { cljParser } from './cljParser';
 
 function slashEscape(contents: string) {
     return contents
@@ -25,6 +26,8 @@ const parseCljfmtOutput = (value: any[]): string => {
             return new_content;
         } else if (v.err) {
             throw v.err;
+        } else if (v.ex) {
+            throw v.ex;
         }
     }
 
@@ -55,10 +58,6 @@ interface IEastwoodReport {
     warnings: IProblem[];
     err?: any;
     'err-data'?: any;
-}
-
-const getNamespace = (contents: string): string => {
-    return contents.split('(ns ', 2)[1].split(' ', 1)[0].trim().replace('\\n', '');
 }
 
 const isNumberValid = (n: number) => n !== undefined && n !== null && !isNaN(n);
@@ -101,7 +100,7 @@ const bikeshedCommand = (filename: string) => `
         (b/bad-roots all-files)))
 `;
 
-const checkBikeshed = async (diagnosticsCollection: vscode.DiagnosticCollection, filename: string): Promise<Map<string, vscode.Diagnostic[]>> => {
+const checkBikeshed = async (filename: string): Promise<Map<string, vscode.Diagnostic[]>> => {
     const file = filename.replace(/\\/g, '\\\\');
     const result = await nreplClient.evaluate(bikeshedCommand(file));
     const diagnosticMap: Map<string, vscode.Diagnostic[]> = new Map();
@@ -146,7 +145,7 @@ const checkBikeshed = async (diagnosticsCollection: vscode.DiagnosticCollection,
     return diagnosticMap;
 }
 
-const checkEastwood = async (diagnosticsCollection: vscode.DiagnosticCollection, namespace: string): Promise<Map<string, vscode.Diagnostic[]>> => {
+const checkEastwood = async (namespace: string): Promise<Map<string, vscode.Diagnostic[]>> => {
     const result = await nreplClient.evaluate(
         `(require \'[eastwood.lint :as e]
                   \'[leiningen.core.project :as p]
@@ -196,11 +195,9 @@ const checkEastwood = async (diagnosticsCollection: vscode.DiagnosticCollection,
     return diagnosticMap;
 }
 
-const checkBuild = async (diagnosticsCollection: vscode.DiagnosticCollection, filepath: string, rootPath: string): Promise<Map<string, vscode.Diagnostic[]>> => {
-    const file = filepath.replace(/\\/g, '/');
-    const result = await nreplClient.evaluate(`
-        (load-file "${file}")
-    `);
+const checkBuild = async (contents: string, filename: string): Promise<Map<string, vscode.Diagnostic[]>> => {
+    const file = filename.replace(/\\/g, '/');
+    const result = await nreplClient.evaluateFile(contents, filename);
     const diagnosticMap: Map<string, vscode.Diagnostic[]> = new Map();
     result.forEach(r => {
         if (!r.err) {
@@ -239,8 +236,8 @@ const checkBuild = async (diagnosticsCollection: vscode.DiagnosticCollection, fi
     return diagnosticMap;
 }
 
-const getContents = (textEditor: vscode.TextEditor): string => {
-    const contents =  textEditor.document.getText();
+const getContents = (document: vscode.TextDocument): string => {
+    const contents =  document.getText();
     return slashEscape(contents);
 }
 
@@ -252,14 +249,15 @@ const getTextEditorSelection = (textEditor: vscode.TextEditor): vscode.Selection
 
 const performLintChecks = async (
     diagnosticsCollection: vscode.DiagnosticCollection,
-    textEditor: vscode.TextEditor,
-    filename: string
+    document: vscode.TextDocument
 ): Promise<void> => {
-    const namespace = getNamespace(getContents(textEditor));
+    const filename = document.fileName;
+    const contents = getContents(document);
+    const namespace = cljParser.getNamespace(contents);
     const maps = [
-        await checkBuild(diagnosticsCollection, filename, vscode.workspace.rootPath || ''),
-        await checkEastwood(diagnosticsCollection, namespace),
-        await checkBikeshed(diagnosticsCollection, filename)
+        await checkBuild(contents, filename),
+        await checkEastwood(namespace),
+        await checkBikeshed(filename)
     ];
 
     const diagnosticMap: Map<string, vscode.Diagnostic[]> = new Map();
@@ -284,7 +282,7 @@ export const format = (textEditor: vscode.TextEditor): Promise<void> => {
         }
 
         const selection = getTextEditorSelection(textEditor);
-        const contents = getContents(textEditor);
+        const contents = getContents(textEditor.document);
         formatCljfmt(contents).then(new_contents => {
             textEditor.edit(editBuilder => {
                 editBuilder.replace(selection, new_contents);
@@ -302,14 +300,13 @@ export const formatFile = async (textEditor: vscode.TextEditor, edit?: vscode.Te
     }
 }
 
-const shouldRunFormat = (textEditor: vscode.TextEditor, document: vscode.TextDocument) => {
+const shouldRunFormat = (document: vscode.TextDocument) => {
     const editorConfig = vscode.workspace.getConfiguration('editor');
     const globalEditorFormatOnSave = editorConfig && editorConfig.has('formatOnSave') && editorConfig.get('formatOnSave') === true;
     const clojureConfig = vscode.workspace.getConfiguration('clojureVSCode');
 
     return document.languageId === "clojure" &&
-           (clojureConfig.formatOnSave || globalEditorFormatOnSave) &&
-           textEditor.document === document;
+           (clojureConfig.formatOnSave || globalEditorFormatOnSave);
 }
 
 export const maybeActivateFormatOnSave = (diagnosticsCollection: vscode.DiagnosticCollection) => {
@@ -320,22 +317,17 @@ export const maybeActivateFormatOnSave = (diagnosticsCollection: vscode.Diagnost
             return
         }
 
-        if (shouldRunFormat(textEditor, document)) {
+        if (shouldRunFormat(document) && textEditor.document === document) {
             e.waitUntil(formatFile(textEditor, undefined));
         }
     });
 
     vscode.workspace.onDidSaveTextDocument(e => {
-        const textEditor = vscode.window.activeTextEditor;
-        if (!textEditor) {
-            return
-        }
-
-        if (shouldRunFormat(textEditor, e)) {
+        if (shouldRunFormat(e)) {
             diagnosticsCollection.clear();
             vscode.window.withProgress(
                 { title: 'Linting...', location: vscode.ProgressLocation.Window },
-                () => performLintChecks(diagnosticsCollection, textEditor, e.fileName)
+                () => performLintChecks(diagnosticsCollection, e)
             );
         }
     })

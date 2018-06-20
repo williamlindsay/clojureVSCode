@@ -46,7 +46,7 @@ interface nREPLCloseMessage {
     session?: string;
 }
 
-const DONE = 'doneee';
+const DONE = 'ee';
 
 const complete = (symbol: string, ns: string): Promise<any> => {
     const msg: nREPLCompleteMessage = { op: 'complete', symbol, ns };
@@ -133,7 +133,7 @@ const send = (
                 const endIndex = nreplResp.length + lastIndex + DONE.length;
                 const relevant = nreplResp.substring(0, endIndex);
                 const { decodedObjects } = bencodeUtil.decodeString(relevant);
-                hasValue = decodedObjects.find(o => o.value && o.value !== 'nil' || o.out) !== undefined;
+                hasValue = decodedObjects.find(o => o.value && o.value !== 'nil' || o.out || o.ex) !== undefined;
 
                 if (hasValue || !expectValue) {
                     client.end();
