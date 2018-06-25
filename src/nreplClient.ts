@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import * as net from 'net';
-import { Buffer } from 'buffer';
 
 import * as bencodeUtil from './bencodeUtil';
 import { cljConnection, CljConnectionInformation } from './cljConnection';
@@ -133,7 +132,7 @@ const send = (
                 const endIndex = nreplResp.length + lastIndex + DONE.length;
                 const relevant = nreplResp.substring(0, endIndex);
                 const { decodedObjects } = bencodeUtil.decodeString(relevant);
-                hasValue = decodedObjects.find(o => o.value && o.value !== 'nil' || o.out || o.ex) !== undefined;
+                hasValue = decodedObjects.find(o => o.value && o.value !== 'nil' || o.out || o.err) !== undefined;
 
                 if (hasValue || !expectValue) {
                     client.end();

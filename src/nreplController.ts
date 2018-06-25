@@ -77,7 +77,8 @@ const start = (): Promise<CljConnectionInformation> => {
             // Bring the output channel to the foreground so that the user can
             // use the output to debug the problem.
             nreplChannel.show();
-            return reject({ nreplError: message});
+            nreplProcess = null;
+            return reject({ nreplError: message });
         });
     });
 };

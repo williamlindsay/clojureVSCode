@@ -7,8 +7,7 @@ import { cljParser } from './cljParser';
 function slashEscape(contents: string) {
     return contents
         .replace(/\\/g, '\\\\')
-        .replace(/"/g, '\\"')
-        .replace(/\n/g, '\\n');
+        .replace(/"/g, '\\"');
 }
 
 function slashUnescape(contents: string) {
@@ -197,7 +196,9 @@ const checkEastwood = async (namespace: string): Promise<Map<string, vscode.Diag
 
 const checkBuild = async (contents: string, filename: string): Promise<Map<string, vscode.Diagnostic[]>> => {
     const file = filename.replace(/\\/g, '/');
-    const result = await nreplClient.evaluateFile(contents, filename);
+    const result = await nreplClient.evaluate(`
+        (load-file "${file}")
+    `);
     const diagnosticMap: Map<string, vscode.Diagnostic[]> = new Map();
     result.forEach(r => {
         if (!r.err) {
