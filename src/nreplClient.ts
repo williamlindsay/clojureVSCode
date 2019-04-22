@@ -108,8 +108,6 @@ const send = (
             return reject('No connection found.');
 
         const client = net.createConnection(connection.port, connection.host);
-        Object.keys(msg).forEach(key => (msg as any)[key] === undefined && delete (msg as any)[key]);
-        client.write(bencodeUtil.encode(msg), 'binary');
 
         client.on('error', error => {
             client.end();
@@ -144,12 +142,11 @@ const send = (
                 }
             }
         });
+
+        Object.keys(msg).forEach(key => (msg as any)[key] === undefined && delete (msg as any)[key]);
+        client.write(bencodeUtil.encode(msg), 'binary');
     });
 };
-
-const lastNreplObjectIndex = (nreplObjets: any[]): number => {
-    return nreplObjets.findIndex(o => o && o.status && o.status.includes('done'));
-}
 
 export const nreplClient = {
     complete,

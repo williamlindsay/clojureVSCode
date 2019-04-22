@@ -2,7 +2,7 @@
     "name": "clojure-lint",
     "displayName": "Clojure-lint",
     "description": "Extension to Andrey Lisin's Clojure",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "publisher": "williamlindsay",
     "author": {
         "name": "William Lindsay",

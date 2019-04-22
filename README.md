@@ -5,7 +5,7 @@ Based on Andrey Lisin's VS Code Clojure extension.
 - Options for linters are now pulled from project.clj as explained in their respective repoes
 - Reports Clojure compilation errors to problems as well
 - Bottom left spinner will appear while linting in progress
+- Supports 2.9.1
 
 Limitations:
 - Must save twice at the start for some reason to fix bug above
-- Only supports lein 2.7.1 at the moment
